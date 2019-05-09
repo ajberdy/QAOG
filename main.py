@@ -11,6 +11,7 @@ import math
 
 import numpy as np
 from pyquil import get_qc
+from pyquil.api import WavefunctionSimulator
 
 from pyquil.quil import Program, DefGate, merge_programs
 from pyquil.gates import H, X, RX
@@ -29,7 +30,7 @@ class TerminalNode:
     def __repr__(self):
         return f"T<{self.value}>"
 
-    def pprint(self, depth):
+    def pprint(self, _):
         return f"T<{self.value}>"
 
 
@@ -67,10 +68,8 @@ class AndNode:
 
 
 def get_theta(left_prob):
-    theta = math.acos(math.sqrt(left_prob))
-    if theta > PI/2:
-        return theta - PI
-    return theta
+    # return math.acos(1 - 2*left_prob)
+    return 2*math.acos(math.sqrt(left_prob))
 
 
 def toy_aog():
@@ -87,12 +86,12 @@ def toy_aog():
     colder = TerminalNode("colder.")
     jumping = TerminalNode("jumping.")
 
-    is_now_or_was = OrNode(is_now, was, PI/4)
-    coming_or_warmer = OrNode(coming, warmer, PI/4)
-    leaving_or_colder = OrNode(leaving, colder, PI/4)
+    is_now_or_was = OrNode(is_now, was, PI/2)
+    coming_or_warmer = OrNode(coming, warmer, PI/2)
+    leaving_or_colder = OrNode(leaving, colder, PI/2)
 
-    coming_or_leaving = OrNode(coming, leaving, PI/4)
-    coming_or_leaving_or_jumping = OrNode(coming_or_leaving, jumping, math.atan(1/SQRT2))
+    coming_or_leaving = OrNode(coming, leaving, PI/2)
+    coming_or_leaving_or_jumping = OrNode(coming_or_leaving, jumping, get_theta(2/3))
 
     spring_and_linker = AndNode(spring, is_now_or_was)
     winter_and_linker = AndNode(winter, is_now_or_was)
@@ -102,10 +101,17 @@ def toy_aog():
     winter_sentence = AndNode(winter_and_linker, leaving_or_colder)
     hamster_sentence = AndNode(hamster_and_linker, coming_or_leaving_or_jumping)
 
-    weather_sentence = OrNode(spring_sentence, winter_sentence, PI/4)
+    weather_sentence = OrNode(spring_sentence, winter_sentence, PI/2)
     weather_or_hamster_sentence = OrNode(weather_sentence, hamster_sentence, get_theta(.58))
 
     return weather_or_hamster_sentence
+
+
+def coin_flip_aog():
+    heads = TerminalNode("H")
+    tails = TerminalNode("T")
+    flip = OrNode(heads, tails, get_theta(.5))
+    return flip
 
 
 def parse_aog(qubits, node):
@@ -176,13 +182,39 @@ def build_qaog(program, history, aog):
         return program, history_after_right
 
 
+def get_parse_dict(wavefunction, aog):
+    def to_list(qstring):
+        return np.array([int(q == "1") for q in reversed(qstring)])
+
+    prob_dict = wavefunction.get_outcome_probs()
+    parse_dict = {
+        parse_aog(to_list(qubits), aog)[0]: prob for qubits, prob in prob_dict.items() if prob
+    }
+    return parse_dict
+
+
 if __name__ == '__main__':
     args = parse_args()
     aog = toy_aog()
     pretty_aog = aog.pprint(depth=0)
-    print(pretty_aog)
+    # print(pretty_aog)
     parsed = parse_aog([1, 0, 0, 1], aog)
-    print(parsed)
+    # print(parsed)
 
     qaog, history = build_qaog(Program(), [], aog)
-    print(qaog.get_qubits())
+    num_qubits = len(qaog.get_qubits())
+
+    qc = get_qc(f'{num_qubits}q-qvm')
+    wfn = WavefunctionSimulator().wavefunction(qaog)
+    print(wfn)
+    hamster_parse_dict = get_parse_dict(wfn, aog)
+    for parse, prob in hamster_parse_dict.items():
+        print(f"{prob:.4f} of: {parse}")
+
+    qcaog, chistory = build_qaog(Program(), [], coin_flip_aog())
+    nc = len(qcaog.get_qubits())
+    cqc = get_qc(f'{nc}q-qvm')
+    cwfn = WavefunctionSimulator().wavefunction(qcaog)
+    print(cwfn)
+    cparse_dict = get_parse_dict(cwfn, coin_flip_aog())
+    print(cparse_dict)
