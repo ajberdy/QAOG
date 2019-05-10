@@ -8,6 +8,7 @@ Quantum AOG
 import logging
 import argparse
 import math
+from collections import defaultdict
 
 import numpy as np
 from pyquil import get_qc
@@ -182,6 +183,13 @@ def build_qaog(program, history, aog):
         return program, history_after_right
 
 
+def sample_qoag(qaog, aog=None, num_trials=1):
+    parse_maps = WavefunctionSimulator().run_and_measure(qaog, trials=num_trials)
+    if aog is None:
+        return parse_maps
+    return np.array([parse_aog(pm, aog)[0] for pm in parse_maps])
+
+
 def get_parse_dict(wavefunction, aog):
     def to_list(qstring):
         return np.array([int(q == "1") for q in reversed(qstring)])
@@ -196,12 +204,8 @@ def get_parse_dict(wavefunction, aog):
 if __name__ == '__main__':
     args = parse_args()
     aog = toy_aog()
-    pretty_aog = aog.pprint(depth=0)
-    # print(pretty_aog)
-    parsed = parse_aog([1, 0, 0, 1], aog)
-    # print(parsed)
 
-    qaog, history = build_qaog(Program(), [], aog)
+    qaog, _ = build_qaog(Program(), [], aog)
     num_qubits = len(qaog.get_qubits())
 
     qc = get_qc(f'{num_qubits}q-qvm')
@@ -211,10 +215,12 @@ if __name__ == '__main__':
     for parse, prob in hamster_parse_dict.items():
         print(f"{prob:.4f} of: {parse}")
 
-    qcaog, chistory = build_qaog(Program(), [], coin_flip_aog())
-    nc = len(qcaog.get_qubits())
-    cqc = get_qc(f'{nc}q-qvm')
-    cwfn = WavefunctionSimulator().wavefunction(qcaog)
-    print(cwfn)
-    cparse_dict = get_parse_dict(cwfn, coin_flip_aog())
-    print(cparse_dict)
+    num_trials = 1000000
+    counter = defaultdict(lambda: 0)
+    samples = sample_qoag(qaog, aog, num_trials)
+    for sample in samples:
+        counter[sample] += 1
+
+    for parse, prob in counter.items():
+        print(parse)
+        print(prob/num_trials, hamster_parse_dict[parse])
