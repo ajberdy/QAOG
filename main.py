@@ -51,6 +51,9 @@ class OrNode:
                 f"{depth*'  '}  {self.right.pprint(depth+1)}\n"
                 f"{depth*'  '}>")
 
+    def flipped(self):
+        return OrNode(self.right, self.left, self.theta)
+
 
 class AndNode:
     def __init__(self, left, right):
@@ -106,6 +109,26 @@ def toy_aog():
     weather_or_hamster_sentence = OrNode(weather_sentence, hamster_sentence, get_theta(.58))
 
     return weather_or_hamster_sentence
+
+
+def entangled_aog():
+    sentence_about = TerminalNode("Sentence about ")
+    weather = TerminalNode("weather ")
+    hamster = TerminalNode("hamster ")
+    past_tense = TerminalNode("(past tense): ")
+    present_tense = TerminalNode("(present tense): ")
+
+    hamster_or_weather = OrNode(hamster, weather, PI/2)
+    past_or_present = OrNode(past_tense, present_tense, PI/2)
+
+    intro_and_noun = AndNode(sentence_about, hamster_or_weather)
+    description_sentence = AndNode(intro_and_noun, past_or_present)
+
+    sentence = toy_aog()
+
+    description_and_sentence = AndNode(description_sentence, sentence)
+
+    return description_and_sentence
 
 
 def coin_flip_aog():
@@ -190,6 +213,16 @@ def sample_qoag(qaog, aog=None, num_trials=1):
     return np.array([parse_aog(pm, aog)[0] for pm in parse_maps])
 
 
+def in_qaog(qaog, parse_map):
+    n = len(qaog.get_qubits())
+    c_on, c_off = split_control(parse_map)
+    checker = controlled(qaog, X(n), c_on, c_off)
+    result = WavefunctionSimulator().run_and_measure(checker)
+    wfn = WavefunctionSimulator().wavefunction(checker)
+    print(wfn.pretty_print())
+    print(result)
+
+
 def get_parse_dict(wavefunction, aog):
     def to_list(qstring):
         return np.array([int(q == "1") for q in reversed(qstring)])
@@ -203,7 +236,8 @@ def get_parse_dict(wavefunction, aog):
 
 if __name__ == '__main__':
     args = parse_args()
-    aog = toy_aog()
+    # aog = toy_aog()
+    aog = entangled_aog()
 
     qaog, _ = build_qaog(Program(), [], aog)
     num_qubits = len(qaog.get_qubits())
@@ -215,12 +249,15 @@ if __name__ == '__main__':
     for parse, prob in hamster_parse_dict.items():
         print(f"{prob:.4f} of: {parse}")
 
-    num_trials = 1000000
-    counter = defaultdict(lambda: 0)
-    samples = sample_qoag(qaog, aog, num_trials)
-    for sample in samples:
-        counter[sample] += 1
+    # in_qaog(qaog, [0, 1, 1, 0])
+    # print(parse_aog([0, 1, 1, 0], aog)[0])
 
-    for parse, prob in counter.items():
-        print(parse)
-        print(prob/num_trials, hamster_parse_dict[parse])
+    # num_trials = 1000000
+    # counter = defaultdict(lambda: 0)
+    # samples = sample_qoag(qaog, aog, num_trials)
+    # for sample in samples:
+    #     counter[sample] += 1
+    #
+    # for parse, prob in counter.items():
+    #     print(parse)
+    #     print(prob/num_trials, hamster_parse_dict[parse])
