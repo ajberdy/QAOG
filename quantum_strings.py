@@ -1,9 +1,21 @@
 """
 Quantum strings
 """
+import math
+import re
+from collections import defaultdict
+from itertools import product
 
 import numpy as np
-from cirq import LineQubit, Moment, X, Rx, ControlledGate, Circuit
+from cirq import LineQubit, Moment, X, Rx, ControlledGate, Circuit, Simulator, measure
+from sympy import symbols
+from sympy.logic import SOPform
+
+
+def bin_string_iter(n):
+    """ generates all binary strings of length n in order """
+    for bin_string in product([0, 1], repeat=n):
+        yield list(bin_string)
 
 
 class Distribution:
@@ -78,30 +90,37 @@ class AOG:
         if distribution is None:
             return
 
+        self.n = distribution.n
+
         if distribution.n == 1:
             if distribution.is_singular():
                 self.type = AOG.TERMINAL
                 self._data = distribution.sample()
+                self.depth = 0
             else:
                 self.type = AOG.OR
                 self._left = AOG.terminal(0)
                 self._right = AOG.terminal(1)
                 self._lprob = distribution[0]
+                self.depth = 1
         else:
             zero_child, one_child, lprob = distribution.split_by_first_bit()
             if lprob == 1:
                 self.type = AOG.AND
                 self._left = AOG.terminal(0)
                 self._right = AOG(zero_child)
+                self.depth = self._right.depth
             elif lprob == 0:
                 self.type = AOG.AND
                 self._left = AOG.terminal(1)
                 self._right = AOG(one_child)
+                self.depth = self._right.depth
             else:
                 self.type = AOG.OR
                 self._left = AOG.and_(AOG.terminal(0), AOG(zero_child))
                 self._right = AOG.and_(AOG.terminal(1), AOG(one_child))
                 self._lprob = lprob
+                self.depth = max(self._left.depth, self._right.depth) + 1
 
     def pprint(self, depth=0):
         if self.type == AOG.TERMINAL:
@@ -124,6 +143,8 @@ class AOG:
         aog = AOG()
         aog.type = AOG.TERMINAL
         aog._data = data
+        aog.depth = 0
+        aog.n = 1
         return aog
 
     @classmethod
@@ -132,6 +153,8 @@ class AOG:
         aog.type = AOG.AND
         aog._left = left
         aog._right = right
+        aog.depth = max(aog._left.depth, aog._right.depth)
+        aog.n = aog._left.n + aog._right.n
         return aog
 
     @classmethod
@@ -141,22 +164,80 @@ class AOG:
         aog._left = left
         aog._right = right
         aog._lprob = lprob
+        aog.depth = max(aog._left.depth, aog._right.depth) + 1
+        aog.n = aog._left.n
         return aog
 
-    def to_circuit(self):
-        raise NotImplemented
+    @property
+    def _theta(self):
+        return 2*math.acos(math.sqrt(self._lprob))
+
+    def to_circuit(self, history=None, ix=0, n=None, minterms=None, depth=None):
+
+        if n is None:
+            n = self.n
+
+        if history is None:
+            history = []
+
+        if minterms is None:
+            minterms = defaultdict(lambda: [])
+
+        if depth is None:
+            depth = self.depth
+
+        c_on, c_off = split_control(history, n)
+        qix = len(history)
+
+        if self.type == AOG.TERMINAL:
+            circuit = Circuit()
+            if self._data:
+                for cont in bin_string_iter(depth - len(history)):
+                    aug_history = history + cont
+                    aug_c_on, aug_c_off = split_control(aug_history, n)
+                    circuit.append(controlled_circuit(X, [LineQubit(ix)], aug_c_on, aug_c_off))
+            return circuit, history, 1
+
+        elif self.type == AOG.OR:
+            or_gate = Rx(self._theta)
+            circuit = controlled_circuit(or_gate, [LineQubit(qix + n)], c_on, c_off)
+            left_circuit, _, left_len = self._left.to_circuit(history + [0], ix, n, minterms, depth)
+            right_circuit, _, right_len = self._right.to_circuit(history + [1], ix, n, minterms, depth)
+
+            assert left_len == right_len    # debugging
+            circuit.append(left_circuit)
+            circuit.append(right_circuit)
+            return circuit, history + [-1], left_len
+
+        elif self.type == AOG.AND:
+            left_circuit, history_after_left, left_len = self._left.to_circuit(history, ix, n, minterms, depth)
+            right_circuit, history_after_right, right_len = \
+                self._right.to_circuit(history_after_left, ix + left_len, n, minterms, depth)
+            left_circuit.append(right_circuit)
+            return left_circuit, history_after_right, left_len + right_len
 
 
-def controlled_gate(gate, qubits, on_qubits, off_qubits):
+def split_control(control_qubits, n=0):
+    control_on = [LineQubit(i) for i, q in enumerate(control_qubits, start=n) if q == 1]
+    control_off = [LineQubit(i) for i, q in enumerate(control_qubits, start=n) if q == 0]
+    return control_on, control_off
 
-    flip_offs = Moment([X(i) for i in off_qubits])
+
+def controlled_circuit(gate, qubits, on_qubits, off_qubits):
+    flip_offs = [X(i) for i in off_qubits]
     control_qubits = on_qubits + off_qubits
     c_gate = gate.controlled_by(*control_qubits)
-    c_moment = Moment([c_gate(*qubits)])
-    return Circuit([flip_offs, c_moment, flip_offs])
+    return Circuit.from_ops([*flip_offs, c_gate(*qubits), *flip_offs])
 
 
 if __name__ == '__main__':
+    q = [LineQubit(i) for i in range(8)]
+    c_gate = controlled_circuit(Rx(math.pi), [q[0]], [q[1], q[3]], [q[2], q[5], q[6]])
+    # print(c_gate)
+    # exit(0)
+
+
+
     dist = {
         0b0011: 1/2,
         0b1011: 1/4,
@@ -166,33 +247,42 @@ if __name__ == '__main__':
     d = Distribution(dist, 4)
 
     qubits = [LineQubit(i) for i in range(6)]
-    print(controlled_gate(X, [qubits[0]], [qubits[1], qubits[2]], [qubits[3]]))
-    exit(0)
+    # print(controlled_circuit(X, [qubits[0]], [qubits[1], qubits[2]], [qubits[3]]))
+    # exit(0)
 
 
-
-    print(d[3])
-    print(d[0b11])
-    print(d[0b0011])
-    print(d["0b0011"])
-    print(d["0011"])
-    print(d["11"])
-
-    print(d)
-    print(d.split_by_first_bit())
-    for i in range(10):
-        print(d.sample())
-
+    #
+    # print(d[3])
+    # print(d[0b11])
+    # print(d[0b0011])
+    # print(d["0b0011"])
+    # print(d["0011"])
+    # print(d["11"])
+    #
+    # print(d)
+    # print(d.split_by_first_bit())
+    # for i in range(10):
+    #     print(d.sample())
+    #
     aog = AOG(d)
+    # print(aog.depth)
     print(aog.pprint())
-    exit(0)
-    print(AOG.terminal(0).pprint())
-    print(AOG.terminal(1).pprint())
-    print(AOG.and_(AOG.terminal(1), AOG.terminal(0)).pprint())
-    print(AOG.or_(
-        AOG.and_(AOG.terminal(1), AOG.terminal(0)),
-        AOG.and_(AOG.terminal(1), AOG.terminal(1)), .5).pprint())
-    print(AOG.and_(
-        AOG.terminal(1),
-        AOG.or_(AOG.terminal(0), AOG.terminal(1), .5)
-    ).pprint())
+    # # exit(0)
+    # print(AOG.terminal(0).pprint())
+    # print(AOG.terminal(1).pprint())
+    # print(AOG.and_(AOG.terminal(1), AOG.terminal(0)).pprint())
+    # print(AOG.or_(
+    #     AOG.and_(AOG.terminal(1), AOG.terminal(0)),
+    #     AOG.and_(AOG.terminal(1), AOG.terminal(1)), .5).pprint())
+    # print(AOG.and_(
+    #     AOG.terminal(1),
+    #     AOG.or_(AOG.terminal(0), AOG.terminal(1), .5)
+    # ).pprint())
+
+    aog_circuit, _, _ = aog.to_circuit()
+    # aog_circuit.append(Circuit.from_ops(measure(*[LineQubit(i) for i in range(aog.n)], key='reading')))
+    print(aog_circuit)
+
+    simulator = Simulator()
+    result = simulator.simulate(aog_circuit)
+    print(result)
