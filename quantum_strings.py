@@ -3,7 +3,7 @@ Quantum strings
 """
 
 import numpy as np
-from cirq import LineQubit, Moment, X, Rx
+from cirq import LineQubit, Moment, X, Rx, ControlledGate, Circuit
 
 
 class Distribution:
@@ -147,6 +147,15 @@ class AOG:
         raise NotImplemented
 
 
+def controlled_gate(gate, qubits, on_qubits, off_qubits):
+
+    flip_offs = Moment([X(i) for i in off_qubits])
+    control_qubits = on_qubits + off_qubits
+    c_gate = gate.controlled_by(*control_qubits)
+    c_moment = Moment([c_gate(*qubits)])
+    return Circuit([flip_offs, c_moment, flip_offs])
+
+
 if __name__ == '__main__':
     dist = {
         0b0011: 1/2,
@@ -155,6 +164,13 @@ if __name__ == '__main__':
         0b1110: 1/8
     }
     d = Distribution(dist, 4)
+
+    qubits = [LineQubit(i) for i in range(6)]
+    print(controlled_gate(X, [qubits[0]], [qubits[1], qubits[2]], [qubits[3]]))
+    exit(0)
+
+
+
     print(d[3])
     print(d[0b11])
     print(d[0b0011])
