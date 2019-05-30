@@ -6,7 +6,7 @@ from collections import defaultdict
 from itertools import product
 
 import numpy as np
-from cirq import LineQubit, Moment, X, Rx, ControlledGate, Circuit, Simulator, measure
+from cirq import LineQubit, Moment, X, Rx, ControlledGate, Circuit, Simulator, measure, H
 
 
 def bin_string_iter(n):
@@ -18,7 +18,18 @@ def bin_string_iter(n):
 class Distribution:
 
     def __init__(self, dist, n):
-        self._dist = dist
+        self._dist = {}
+        for k, v in dist.items():
+            if isinstance(k, str):
+                try:
+                    self._dist[ord(k)] = v
+                except TypeError:
+                    self._dist[int(k, 2)] = v
+            elif isinstance(k, int) or isinstance(k, np.int64):
+                self._dist[k] = v
+            else:
+                print(k, type(k))
+                raise TypeError("distribution key must be number or binary string")
         self.n = n
 
     def __getitem__(self, item):
@@ -40,6 +51,9 @@ class Distribution:
 
     def __repr__(self):
         return f"<Distribution>{{{', '.join(f'{k:0{self.n}b}: {v:.4f}' for k, v in self._dist.items())}}}"
+
+    def print_strs(self):
+        return f"<Distribution>{{{', '.join(f'{chr(k)}: {v:.4f}' for k, v in self._dist.items())}}}"
 
     def is_singular(self):
         return len(self) == 1
@@ -81,6 +95,7 @@ class AOG:
         if distribution is None:
             return
 
+        self._circuit = None
         self.n = distribution.n
 
         if distribution.n == 1:
@@ -163,16 +178,13 @@ class AOG:
     def _theta(self):
         return 2*math.acos(math.sqrt(self._lprob))
 
-    def to_circuit(self, history=None, ix=0, n=None, minterms=None, depth=None):
+    def to_circuit(self, history=None, ix=0, n=None, depth=None):
 
         if n is None:
             n = self.n
 
         if history is None:
             history = []
-
-        if minterms is None:
-            minterms = defaultdict(lambda: [])
 
         if depth is None:
             depth = self.depth
@@ -183,17 +195,20 @@ class AOG:
         if self.type == AOG.TERMINAL:
             circuit = Circuit()
             if self._data:
-                for cont in bin_string_iter(depth - len(history)):
-                    aug_history = history + cont
-                    aug_c_on, aug_c_off = split_control(aug_history, n)
-                    circuit.append(controlled_circuit(X, [LineQubit(ix)], aug_c_on, aug_c_off))
+                if not history:
+                    circuit.append(X(LineQubit(ix)))
+                else:
+                    for cont in bin_string_iter(depth - len(history)):
+                        aug_history = history + cont
+                        aug_c_on, aug_c_off = split_control(aug_history, n)
+                        circuit.append(controlled_circuit(X, [LineQubit(ix)], aug_c_on, aug_c_off))
             return circuit, history, 1
 
         elif self.type == AOG.OR:
             or_gate = Rx(self._theta)
             circuit = controlled_circuit(or_gate, [LineQubit(qix + n)], c_on, c_off)
-            left_circuit, _, left_len = self._left.to_circuit(history + [0], ix, n, minterms, depth)
-            right_circuit, _, right_len = self._right.to_circuit(history + [1], ix, n, minterms, depth)
+            left_circuit, _, left_len = self._left.to_circuit(history + [0], ix, n, depth)
+            right_circuit, _, right_len = self._right.to_circuit(history + [1], ix, n, depth)
 
             assert left_len == right_len    # debugging
             circuit.append(left_circuit)
@@ -201,11 +216,33 @@ class AOG:
             return circuit, history + [-1], left_len
 
         elif self.type == AOG.AND:
-            left_circuit, history_after_left, left_len = self._left.to_circuit(history, ix, n, minterms, depth)
+            left_circuit, history_after_left, left_len = self._left.to_circuit(history, ix, n, depth)
             right_circuit, history_after_right, right_len = \
-                self._right.to_circuit(history_after_left, ix + left_len, n, minterms, depth)
+                self._right.to_circuit(history_after_left, ix + left_len, n, depth)
             left_circuit.append(right_circuit)
             return left_circuit, history_after_right, left_len + right_len
+
+    def as_circuit(self):
+        if self._circuit is not None:
+            return self._circuit
+
+        else:
+            self._circuit = self.to_circuit()[0]
+            self._circuit.insert(0, Moment([H(LineQubit(i)) for i in range(self.n)]))   # hack to show all qubits
+            self._circuit.insert(0, Moment([H(LineQubit(i)) for i in range(self.n)]))
+            return self._circuit
+
+
+def get_dist(simulator, circuit, n):
+    simulated = simulator.simulate(circuit)
+    state_vector = np.array(simulated.final_simulator_state.state_vector)
+    num_qubits = int(math.log2(len(state_vector)))
+    mod_state_vector = np.sum(state_vector.reshape([-1, 2 ** (num_qubits - n)]), 1)
+    states = np.nonzero(mod_state_vector)[0]
+    probs = np.abs(np.real_if_close(mod_state_vector[states] ** 2))
+    dist = Distribution(dict(zip(states, probs)), n)
+    return dist
+
 
 
 def split_control(control_qubits, n=0):
@@ -222,6 +259,33 @@ def controlled_circuit(gate, qubits, on_qubits, off_qubits):
 
 
 if __name__ == '__main__':
+    uniform_vowel = Distribution(
+        {
+            'a': 1/5,
+            'e': 1/5,
+            'i': 1/5,
+            'o': 1/5,
+            'u': 1/5,
+        }, 8
+    )
+
+    print(uniform_vowel)
+    vowel_aog = AOG(uniform_vowel)
+
+    vowel_dist = get_dist(Simulator(), vowel_aog.as_circuit(), 8)
+    print(vowel_dist.print_strs())
+
+    print(vowel_aog.pprint())
+    quantum_vowel = vowel_aog.as_circuit()
+    print(quantum_vowel)
+    exit(0)
+
+    vowel_sim = Simulator()
+    vowel_res = vowel_sim.simulate(quantum_vowel)
+    print(vowel_res)
+
+    exit(0)
+
     dist = {
         0b0011: 1/2,
         0b1011: 1/4,
