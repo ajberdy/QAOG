@@ -2,14 +2,11 @@
 Quantum strings
 """
 import math
-import re
 from collections import defaultdict
 from itertools import product
 
 import numpy as np
 from cirq import LineQubit, Moment, X, Rx, ControlledGate, Circuit, Simulator, measure
-from sympy import symbols
-from sympy.logic import SOPform
 
 
 def bin_string_iter(n):
@@ -73,12 +70,6 @@ class Distribution:
     def sample(self):
         keys, probs = zip(*self._dist.items())
         return np.random.choice(keys, p=probs)
-
-
-class QChar:
-
-    def __init__(self, dist: Distribution):
-        self.qbyte = [LineQubit(i) for i in range(8)]
 
 
 class AOG:
@@ -231,13 +222,6 @@ def controlled_circuit(gate, qubits, on_qubits, off_qubits):
 
 
 if __name__ == '__main__':
-    q = [LineQubit(i) for i in range(8)]
-    c_gate = controlled_circuit(Rx(math.pi), [q[0]], [q[1], q[3]], [q[2], q[5], q[6]])
-    # print(c_gate)
-    # exit(0)
-
-
-
     dist = {
         0b0011: 1/2,
         0b1011: 1/4,
@@ -245,42 +229,8 @@ if __name__ == '__main__':
         0b1110: 1/8
     }
     d = Distribution(dist, 4)
-
-    qubits = [LineQubit(i) for i in range(6)]
-    # print(controlled_circuit(X, [qubits[0]], [qubits[1], qubits[2]], [qubits[3]]))
-    # exit(0)
-
-
-    #
-    # print(d[3])
-    # print(d[0b11])
-    # print(d[0b0011])
-    # print(d["0b0011"])
-    # print(d["0011"])
-    # print(d["11"])
-    #
-    # print(d)
-    # print(d.split_by_first_bit())
-    # for i in range(10):
-    #     print(d.sample())
-    #
     aog = AOG(d)
-    # print(aog.depth)
-    print(aog.pprint())
-    # # exit(0)
-    # print(AOG.terminal(0).pprint())
-    # print(AOG.terminal(1).pprint())
-    # print(AOG.and_(AOG.terminal(1), AOG.terminal(0)).pprint())
-    # print(AOG.or_(
-    #     AOG.and_(AOG.terminal(1), AOG.terminal(0)),
-    #     AOG.and_(AOG.terminal(1), AOG.terminal(1)), .5).pprint())
-    # print(AOG.and_(
-    #     AOG.terminal(1),
-    #     AOG.or_(AOG.terminal(0), AOG.terminal(1), .5)
-    # ).pprint())
-
     aog_circuit, _, _ = aog.to_circuit()
-    # aog_circuit.append(Circuit.from_ops(measure(*[LineQubit(i) for i in range(aog.n)], key='reading')))
     print(aog_circuit)
 
     simulator = Simulator()
